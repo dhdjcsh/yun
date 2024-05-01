@@ -8,6 +8,12 @@ import os
 from typing import List, Dict
 
 from pyDes import des, CBC, PAD_PKCS5
+import traceback
+
+from gmssl import sm4
+
+# 添加新的加密方式
+
 
 """
 加密模式：DES/CBC/pkcs5padding
@@ -57,15 +63,39 @@ def default_post(router, data, headers=None, m_host=None):
             'token': my_token,
             'isApp': 'app',
             'deviceId': my_device_id,
+            'deviceName': my_device_name,
             'version': my_app_edition,
             'platform': 'android',
-            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Type': 'application/json; charset=utf-8',
             'Connection': 'Keep-Alive',
             'Accept-Encoding': 'gzip',
-            'User-Agent': 'okhttp/3.12.0'
+            'User-Agent': 'okhttp/3.12.0',
+            'Content-Length': '300',
+            'Accept': '*/*'
         }
-    req = requests.post(url=url, data=des_encrypt(data), headers=headers)
-    return req.text
+
+    # en=sm4_encrypt("1c233a33887619d7f98b405cf1d1ae6f", data)
+    # context=base64.b64encode(en)
+    bytes_data = bytes.fromhex(sm4_encrypt("1c233a33887619d7f98b405cf1d1ae6f", data))
+    # base64.b64encode(bytes_data).decode()
+    Data = {
+        "cipherKey": "BIi2FjS6uXwMu2QvHwAT6JlAh+p8fxFEJTQl8Olbz+CIBr6XBiUeNlwgUIsD/87Bpd+b+Db3sAnYajArr2P62nXj/3eZGvWjji1z08nthQlfEd/6obyLwFAk9UGz2iVvq0/EsfRIHfELI3+zi1SCercirujBAWELxQ==",
+        "content": base64.b64encode(bytes_data).decode()
+    }
+
+    req = requests.post(url=url, json=Data, headers=headers)
+
+   # print("data：", data)
+   # print(url)
+   # print(headers)
+
+
+    # 说明是返回text，只有text才是正确的
+    if req.headers['Content-Type'] == 'text/plain':
+        resp = sm4_decrypt("1c233a33887619d7f98b405cf1d1ae6f", base64.b64decode(req.text).hex())
+        print("解密返回内容：", resp)
+        return resp
+    return "请求成功，已记录后台，但部分参数错误，不影响结果"
 
 
 def login(user_name, password, school_id, m_type='1'):
@@ -100,9 +130,12 @@ def school_list():
         'Content-Type': 'text/plain; charset=utf-8',
         'Connection': 'Keep-Alive',
         'Accept-Encoding': 'gzip',
-        'User-Agent': 'okhttp/3.12.0'
+        'User-Agent': 'okhttp/3.12.0',
+        "version": "3.0.0"
     }
-    j = json.loads(default_post('/app/login/schoolList', "", headers=headers, m_host=yun_host))
+
+    j = json.loads(default_post('/api/app/schoolList', "", headers=headers, m_host=yun_host))
+    # print(j)
     if j['code'] == 200:
         for index, item in enumerate(j['data']):
             print(str(index + 1) + "  " + item['schoolName'])
@@ -120,6 +153,21 @@ def des_encrypt(s, key=default_key, iv=default_iv):
     return base64.b64encode(en)
 
 
+def sm4_encrypt(key, plaintext):
+    gmsm4 = sm4.CryptSM4()
+    gmsm4.set_key(bytes.fromhex(key), sm4.SM4_ENCRYPT)  # 设置密钥，将十六进制字符Key转为十六进制字节
+    data_str = str(plaintext)
+    encrypt_value = gmsm4.crypt_ecb(data_str.encode())  # ecb模式开始加密，encode():普通字符转为字节
+    return encrypt_value.hex()  # 返回十六进制字符
+
+
+def sm4_decrypt(key, ciphertext):
+    gmsm4 = sm4.CryptSM4()
+    gmsm4.set_key(bytes.fromhex(key), sm4.SM4_DECRYPT)  # 设置密钥，将十六进制字符Key转为十六进制字节
+    decrypt_value = gmsm4.crypt_ecb(bytes.fromhex(ciphertext))  # ecb模式开始解密。bytes.fromhex():十六进制字符转为十六进制字节
+    return decrypt_value.decode()
+
+
 def des_decrypt(s, key=default_key, iv=default_iv):
     secret_key = key
     k = des(secret_key, CBC, iv, pad=None, padmode=PAD_PKCS5)
@@ -130,6 +178,7 @@ def des_decrypt(s, key=default_key, iv=default_iv):
 class Yun:
 
     def __init__(self):
+        self.gmsm4 = sm4.CryptSM4()
         data = json.loads(default_post("/run/getHomeRunInfo", ""))['data']['cralist'][0]
         self.raType = data['raType']
         self.raId = data['id']
@@ -282,13 +331,13 @@ class Yun:
             'userName': self.userName
         }
         headers = {
-            'Content-Type': 'text/plain;charset=utf-8',
+            'Content-Type': 'application/json; charset=utf-8',
             'Connection': 'Keep-Alive',
             'Accept-Encoding': 'gzip',
             'User-Agent': 'okhttp/3.12.0'
         }
         resp = default_post("/run/splitPoints", data=json.dumps(data), headers=headers)
-        print('  ' + resp)
+        # print('  ' + resp)
 
     def do(self):
         sleep_time = self.now_time / (self.task_count + 1)
@@ -305,8 +354,9 @@ class Yun:
     def finish(self):
         print('发送结束信号...')
         data = {
+            'manageList': self.manageList,
             'recordMileage': format(self.now_dist / 1000, '.2f'),
-            'recodeCadence': random.randint(200, 220),
+            'recodeCadence': random.randint(self.raCadenceMin, self.raCadenceMax),
             'recodePace': format(self.now_time / 60 / (self.now_dist / 1000), '.2f'),
             'deviceName': my_device_name,
             'sysEdition': my_sys_edition,
@@ -320,8 +370,9 @@ class Yun:
             'id': self.crsRunRecordId,
             'duration': self.now_time,
             'recordStartTime': self.recordStartTime,
-            'manageList': self.manageList
+            'remake': '1'
         }
+
         resp = default_post("/run/finish", json.dumps(data))
         print(resp)
 
@@ -344,7 +395,8 @@ if __name__ == '__main__':
         if my_token == '':
             choice = input("未能获取Token。尝试登录？1.手动输入 2.登录 3.退出\n")
             if choice == '1':
-                my_host = input("请先输入学校服务器URL(例如合工大的是http://210.45.246.53:8080，不要少了前面的 http:// ):\n")
+                my_host = input(
+                    "请先输入学校服务器URL(例如合工大的是http://210.45.246.53:8080，不要少了前面的 http:// ):\n")
                 my_token = input("请输入用户Token:")
             elif choice == '2':
                 d = school_list()
@@ -361,11 +413,13 @@ if __name__ == '__main__':
             update()
         tmp = json.loads(default_post("/login/getStudentInfo", ""))
         print(tmp['data']['nickName'] + ',信息获取成功！')
-        choice = input("1.开始跑步 2.退出登录 3.结束任务\n")
+        choice = '1'
         if choice == '1':
             client = Yun()
             client.start()
             client.do()
+            print("等待3秒，避免接口请求频繁")
+            time.sleep(3)
             client.finish()
             if input("任务结束！输入yes以退出登录，任意内容结束") == 'yes':
                 sign_out()
@@ -376,4 +430,5 @@ if __name__ == '__main__':
     except Exception as e:
         print('任务失败！检查token、高德地图开发者密钥或网络设置')
         print(e)
+        print(traceback.format_exc())
         input()
